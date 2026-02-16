@@ -33,65 +33,72 @@ def realizar_login(driver):
     except Exception as e:
         print(f"Error durante el login: {e}")
 
-def procesar_correos(driver):
+def procesar_correos_y_guardar(driver):
     xpath_correos = '//*[@id="mail-list"]//ul/li'
+    # XPath del contenido (ajustado para ser más robusto seleccionando el <pre>)
+    xpath_contenido = '//*[@id="preview-mail-detail"]//pre'
     patron_hora = r"^\d{1,2}:\d{2}$"
     
     print("Esperando bandeja de entrada...")
     WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.XPATH, xpath_correos)))
 
-    # Detectamos cuántos hay
     total_elementos = len(driver.find_elements(By.XPATH, xpath_correos))
-    print(f"Detectados {total_elementos} elementos. Iniciando escaneo...")
+    datos_finales = []
 
     for i in range(total_elementos):
         try:
-            # Volvemos a buscar la lista para que los elementos estén "vivos"
             elementos_frescos = driver.find_elements(By.XPATH, xpath_correos)
-            
-            # Si por algún motivo la lista cambió y el índice ya no existe, saltamos
             if i >= len(elementos_frescos): break
             
             correo = elementos_frescos[i]
             partes = [p.strip() for p in correo.text.split('\n') if p.strip()]
             
-            if len(partes) >= 2:
-                remitente = partes[0].lower()
-                tiempo = partes[1]
+            if len(partes) >= 2 and partes[0].lower() == "mail" and re.match(patron_hora, partes[1]):
+                print(f"--- Extrayendo correo {i+1} ---")
                 
-                if remitente == "mail" and re.match(patron_hora, tiempo):
-                    # Para saber qué correo estamos tocando:
-                    asunto = partes[2] if len(partes) > 2 else "Sin asunto"
-                    print(f"--- TRABAJANDO EN: {asunto} ({tiempo}) ---")
-                    
-                    # Scroll y Click
-                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", correo)
-                    time.sleep(0.5)
-                    
-                    enlace = correo.find_element(By.TAG_NAME, "a")
-                    driver.execute_script("arguments[0].click();", enlace)
-                    
-                    # ESPERA CRUCIAL: Dale 5 segundos para que veas cómo cambia la pantalla
-                    print(f"Esperando a que el panel derecho cargue el correo {i+1}...")
-                    time.sleep(5) 
-                    
-                    # --- AQUÍ ES DONDE INSPECCIONAREMOS EL CUERPO ---
-                    
-                else:
-                    pass
+                # Click para abrir
+                enlace = correo.find_element(By.TAG_NAME, "a")
+                driver.execute_script("arguments[0].click();", enlace)
+                
+                # Esperar a que el texto aparezca en el panel derecho
+                WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, xpath_contenido)))
+                time.sleep(1) # Un segundo extra para asegurar carga
+                
+                # Extraer el texto del <pre>
+                texto_mensaje = driver.find_element(By.XPATH, xpath_contenido).text
+                
+                # Guardamos el texto bruto junto con la hora
+                datos_finales.append({
+                    "Hora": partes[1],
+                    "Contenido": texto_mensaje.replace('\n', ' | ')
+                })
+                
+                print(f"Datos capturados de: {partes[1]}")
+                time.sleep(1) 
 
         except Exception as e:
-            print(f"Error en posición {i}: {e}")
-            time.sleep(1)
+            print(f"Error en correo {i}: {e}")
+
+    # Guardar a CSV al finalizar
+    if datos_finales:
+        guardar_en_csv(datos_finales)
+
+def guardar_en_csv(datos):
+    columnas = datos[0].keys()
+    try:
+        with open(ARCHIVO_SALIDA, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=columnas)
+            writer.writeheader()
+            writer.writerows(datos)
+        print(f"\n¡ÉXITO! Se han guardado {len(datos)} registros en {ARCHIVO_SALIDA}")
+    except Exception as e:
+        print(f"Error al guardar el CSV: {e}")
 
 def main():
     driver = configurar_driver()
     driver.get(URL_CORREO)
-    
     realizar_login(driver)
-    
-    # Ejecutamos la nueva función robusta
-    procesar_correos(driver)
+    procesar_correos_y_guardar(driver)
 
 if __name__ == "__main__":
     main()
